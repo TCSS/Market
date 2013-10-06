@@ -1,0 +1,46 @@
+<?php
+
+/**
+ * @file
+ * Install, and uninstall functions for the affiliate_tree module.
+ */
+
+/**
+* Implements hook_schema().
+*/
+function affiliate_tree_schema() {
+  $schema['affiliate_tree'] = array(
+      'description' => t('Stores whether or not to apply make an offer on a product'),
+      'fields' => array(
+          'uid' => array(
+              'description' => t('registered user'),
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'default' => 0,
+          ),
+          'referrer_uid' => array(
+              'description' => t('referrer user'),
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'default' => 0,
+          ),
+          'parent_uid' => array(
+              'description' => t('parent user'),
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'default' => 0,
+          ),
+          'time' => array(
+              'description' => t('time'),
+              'type' => 'int',
+              'size' => 'big',
+              'not null' => TRUE,
+          ),
+      ),
+      'primary key' => array('uid'),
+  );
+  return $schema;
+}

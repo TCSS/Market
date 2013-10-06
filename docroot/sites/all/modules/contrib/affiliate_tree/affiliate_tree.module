@@ -1,0 +1,1761 @@
+<?php
+
+global $base_url;
+
+/**
+* Implements hook_init().
+*/
+function affiliate_tree_init() {
+  drupal_add_css(drupal_get_path('module', 'affiliate_tree') . '/affiliate_tree.css');
+  global $base_path;
+  drupal_add_js("
+jQuery(document).ready(function() {
+jQuery('#affiliate_tree img').click(function() {
+  jQuery.get('http://" . $_SERVER['HTTP_HOST'] . $base_path . "?q=affiliate_tree/get/'+jQuery(this).attr('title'));
+  window.setTimeout('location.reload()', 500);
+});
+});", 'inline');
+}
+
+/**
+* Implements hook_menu().
+*/
+function affiliate_tree_menu() {
+  $items = array();
+  $items['register/%'] = array(
+      'title' => 'Register',
+      'page callback' => 'affiliate_tree_register',
+      'page arguments' => array(1),
+      'access arguments' => array('access content'),
+      'type' => MENU_CALLBACK,
+  );
+  $items['affiliate_tree/get/%'] = array(
+      'title' => 'Register',
+      'page callback' => 'affiliate_tree_record_user',
+      'page arguments' => array(2),
+      'access arguments' => array('access content'),
+      'type' => MENU_CALLBACK,
+  );
+  return $items;
+}
+
+function affiliate_tree_register($uid) {
+  $_SESSION['referrer_uid'] = $uid;
+  drupal_goto('user/register');
+}
+
+/**
+* Implements hook_form_alter().
+*/
+function affiliate_tree_form_alter(&$form, &$form_state, $form_id) {
+  if ($form_id == 'user_register_form') {
+    $form['#submit'][] = 'affiliate_tree_register_submit';
+  }
+}
+
+function affiliate_tree_register_submit($form, &$form_state) {
+  if (array_key_exists('referrer_uid', $_SESSION) && $_SESSION['referrer_uid']) {
+    $user = db_query("SELECT uid FROM {users} WHERE name='" . $form_state['values']['name'] . "'")->fetchAssoc();
+    db_query("INSERT INTO {affiliate_tree} (uid, referrer_uid,time) VALUES (:uid, :referrer_uid, :time)", array(':uid' => $user['uid'], ':referrer_uid' => $_SESSION['referrer_uid'], ':time' => time()));
+    $tree = array();
+    affiliate_tree_build_tree($tree, $_SESSION['referrer_uid'], TRUE);
+  }
+}
+
+/**
+* Implements hook_block_info().
+*/
+function affiliate_tree_block_info() {
+  $blocks = array();
+  $blocks[0] = array(
+      'info' => t('Affiliate Tree'),
+  );
+  return $blocks;
+}
+
+/**
+* Implements hook_block_view().
+*/
+function affiliate_tree_block_view($delta = '') {
+  if ($delta == 0) {
+    $block['subject'] = t('Affiliate Tree');
+    $block['content'] = drupal_get_form('affiliate_tree_display');
+    return $block;
+  }
+}
+
+function affiliate_tree_display($form, $form_state) {
+  global $user;
+  if (arg(0) == 'user' && is_numeric(arg(1))) {
+    $user = user_load(arg(1));
+  }
+
+  if (!isset($_SESSION['tree_level'])) {
+    $_SESSION['tree_level'] = 0;
+  }
+
+  if (empty($_SESSION['user_affiliate_tree'])) {
+    $_SESSION['user_affiliate_tree'] = $user->uid;
+  }
+
+  $output = affiliate_tree_display_tree();
+
+  $form['username'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Locate by Username'),
+      '#default_value' => '',
+      '#size' => 20,
+      '#maxlength' => 20,
+      '#prefix' => '<div id="locate">'
+  );
+
+  $form['locate'] = array(
+      '#type' => 'submit',
+      '#value' => t('Locate'),
+  );
+
+  $form['back_to_top'] = array(
+      '#type' => 'submit',
+      '#value' => t('Back to Top'),
+      '#suffix' => '</div>' . $output,
+  );
+
+  $form['#submit'] = array('affiliate_tree_display_submit');
+
+  $_SESSION['user_affiliate_tree'] = '';
+
+  return $form;
+}
+
+function affiliate_tree_display_submit($form, &$form_state) {
+  global $user;
+  if ($form_state['clicked_button']['#value'] == t('Back to Top')) {
+    $_SESSION['tree_level'] = 0;
+    $_SESSION['user_affiliate_tree'] = $user->uid;
+  }
+  elseif ($form_state['clicked_button']['#value'] == t('Locate')) {
+    $finduser = user_load_by_name($form_state['values']['username']);
+    affiliate_tree_record_user($finduser);
+  }
+}
+
+function affiliate_tree_build_tree(&$tree, $affiliate_uid, $commit = FALSE) {
+  $result = db_query("SELECT DISTINCT uid FROM {affiliate_tree} WHERE referrer_uid=:referrer_uid OR parent_uid=:parent_uid ORDER BY time ASC", array(':referrer_uid' => $affiliate_uid, ':parent_uid' => $affiliate_uid));
+
+  while ($row = $result->fetchAssoc()) {
+    if (in_array($row['uid'], $tree)) {
+      affiliate_tree_build_tree($tree, $row['uid'], $commit);
+      continue;
+    }
+    $return = affiliate_tree_add_to_tree($tree, $row['uid'], $affiliate_uid, $commit);
+    if (is_array($return)) {
+      $return1 = affiliate_tree_add_to_tree($tree, $row['uid'], $return[0], $commit);
+      $return2 = TRUE;
+      if (is_array($return1))
+        $return2 = affiliate_tree_add_to_tree($tree, $row['uid'], $return[1], $commit);
+
+      if (is_array($return1) && is_array($return2)) {
+        $return3 = affiliate_tree_add_to_tree($tree, $row['uid'], $return1[0], $commit);
+        if (is_array($return3)) {
+          $return4 = affiliate_tree_add_to_tree($tree, $row['uid'], $return1[1], $commit);
+          $return5 = TRUE;
+          $return6 = TRUE;
+          if (is_array($return4)) {
+            $return5 = affiliate_tree_add_to_tree($tree, $row['uid'], $return2[0], $commit);
+            if (is_array($return5)) {
+              $return6 = affiliate_tree_add_to_tree($tree, $row['uid'], $return2[1], $commit);
+            }
+          }
+        }
+
+        if (is_array($return3) && is_array($return4) && is_array($return5) && is_array($return6)) {
+          $return7 = affiliate_tree_add_to_tree($tree, $row['uid'], $return3[0], $commit);
+          $return8 = TRUE;
+          $return9 = TRUE;
+          $return10 = TRUE;
+          $return11 = TRUE;
+          $return12 = TRUE;
+          $return13 = TRUE;
+          $return14 = TRUE;
+
+          if (is_array($return7)) {
+            $return8 = affiliate_tree_add_to_tree($tree, $row['uid'], $return3[1], $commit);
+            if (is_array($return8)) {
+              $return9 = affiliate_tree_add_to_tree($tree, $row['uid'], $return4[0], $commit);
+              if (is_array($return9)) {
+                $return10 = affiliate_tree_add_to_tree($tree, $row['uid'], $return4[1], $commit);
+                if (is_array($return10)) {
+                  $return11 = affiliate_tree_add_to_tree($tree, $row['uid'], $return5[0], $commit);
+                  if (is_array($return11)) {
+                    $return12 = affiliate_tree_add_to_tree($tree, $row['uid'], $return5[1], $commit);
+                    if (is_array($return12)) {
+                      $return13 = affiliate_tree_add_to_tree($tree, $row['uid'], $return6[0], $commit);
+                      if (is_array($return13)) {
+                        $return14 = affiliate_tree_add_to_tree($tree, $row['uid'], $return6[1], $commit);
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          if (is_array($return7) && is_array($return8) && is_array($return9) && is_array($return10) && is_array($return11) && is_array($return12) && is_array($return13) && is_array($return14)) {
+            $return15 = affiliate_tree_add_to_tree($tree, $row['uid'], $return7[0], $commit);
+            $return16 = TRUE;
+            $return17 = TRUE;
+            $return18 = TRUE;
+            $return19 = TRUE;
+            $return20 = TRUE;
+            $return21 = TRUE;
+            $return22 = TRUE;
+            $return23 = TRUE;
+            $return24 = TRUE;
+            $return25 = TRUE;
+            $return26 = TRUE;
+            $return27 = TRUE;
+            $return28 = TRUE;
+            $return29 = TRUE;
+            $return30 = TRUE;
+            if (is_array($return15)) {
+              $return16 = affiliate_tree_add_to_tree($tree, $row['uid'], $return7[1], $commit);
+              if (is_array($return16)) {
+                $return17 = affiliate_tree_add_to_tree($tree, $row['uid'], $return8[0], $commit);
+                if (is_array($return17)) {
+                  $return18 = affiliate_tree_add_to_tree($tree, $row['uid'], $return8[1], $commit);
+                  if (is_array($return18)) {
+                    $return19 = affiliate_tree_add_to_tree($tree, $row['uid'], $return9[0], $commit);
+                    if (is_array($return19)) {
+                      $return20 = affiliate_tree_add_to_tree($tree, $row['uid'], $return9[1], $commit);
+                      if (is_array($return20)) {
+                        $return21 = affiliate_tree_add_to_tree($tree, $row['uid'], $return10[0], $commit);
+                        if (is_array($return21)) {
+                          $return22 = affiliate_tree_add_to_tree($tree, $row['uid'], $return10[1], $commit);
+                          if (is_array($return22)) {
+                            $return23 = affiliate_tree_add_to_tree($tree, $row['uid'], $return11[0], $commit);
+                            if (is_array($return23)) {
+                              $return24 = affiliate_tree_add_to_tree($tree, $row['uid'], $return11[1], $commit);
+                              if (is_array($return24)) {
+                                $return25 = affiliate_tree_add_to_tree($tree, $row['uid'], $return12[0], $commit);
+                                if (is_array($return25)) {
+                                  $return26 = affiliate_tree_add_to_tree($tree, $row['uid'], $return12[1], $commit);
+                                  if (is_array($return26)) {
+                                    $return27 = affiliate_tree_add_to_tree($tree, $row['uid'], $return13[0], $commit);
+                                    if (is_array($return27)) {
+                                      $return28 = affiliate_tree_add_to_tree($tree, $row['uid'], $return13[1], $commit);
+                                      if (is_array($return28)) {
+                                        $return29 = affiliate_tree_add_to_tree($tree, $row['uid'], $return14[0], $commit);
+                                        if (is_array($return29)) {
+                                          $return30 = affiliate_tree_add_to_tree($tree, $row['uid'], $return14[1], $commit);
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+
+            if (is_array($return15) && is_array($return16) && is_array($return17) && is_array($return18) && is_array($return19) && is_array($return20) && is_array($return21) && is_array($return22)
+                    && is_array($return23) && is_array($return24) && is_array($return25) && is_array($return26) && is_array($return27) && is_array($return28) && is_array($return29) && is_array($return30)) {
+              $return31 = affiliate_tree_add_to_tree($tree, $row['uid'], $return15[0], $commit);
+              $return32 = TRUE;
+              $return33 = TRUE;
+              $return34 = TRUE;
+              $return35 = TRUE;
+              $return36 = TRUE;
+              $return37 = TRUE;
+              $return38 = TRUE;
+              $return39 = TRUE;
+              $return40 = TRUE;
+              $return41 = TRUE;
+              $return42 = TRUE;
+              $return43 = TRUE;
+              $return44 = TRUE;
+              $return45 = TRUE;
+              $return46 = TRUE;
+              $return47 = TRUE;
+              $return48 = TRUE;
+              $return49 = TRUE;
+              $return50 = TRUE;
+              $return51 = TRUE;
+              $return52 = TRUE;
+              $return53 = TRUE;
+              $return54 = TRUE;
+              $return55 = TRUE;
+              $return56 = TRUE;
+              $return57 = TRUE;
+              $return58 = TRUE;
+              $return59 = TRUE;
+              $return60 = TRUE;
+              $return61 = TRUE;
+              $return62 = TRUE;
+              if (is_array($return31)) {
+                $return32 = affiliate_tree_add_to_tree($tree, $row['uid'], $return15[1], $commit);
+                if (is_array($return32)) {
+                  $return33 = affiliate_tree_add_to_tree($tree, $row['uid'], $return16[0], $commit);
+                  if (is_array($return33)) {
+                    $return34 = affiliate_tree_add_to_tree($tree, $row['uid'], $return16[1], $commit);
+                    if (is_array($return34)) {
+                      $return35 = affiliate_tree_add_to_tree($tree, $row['uid'], $return17[0], $commit);
+                      if (is_array($return35)) {
+                        $return36 = affiliate_tree_add_to_tree($tree, $row['uid'], $return17[1], $commit);
+                        if (is_array($return36)) {
+                          $return37 = affiliate_tree_add_to_tree($tree, $row['uid'], $return18[0], $commit);
+                          if (is_array($return37)) {
+                            $return38 = affiliate_tree_add_to_tree($tree, $row['uid'], $return18[1], $commit);
+                            if (is_array($return38)) {
+                              $return39 = affiliate_tree_add_to_tree($tree, $row['uid'], $return19[0], $commit);
+                              if (is_array($return39)) {
+                                $return40 = affiliate_tree_add_to_tree($tree, $row['uid'], $return19[1], $commit);
+                                if (is_array($return40)) {
+                                  $return41 = affiliate_tree_add_to_tree($tree, $row['uid'], $return20[0], $commit);
+                                  if (is_array($return41)) {
+                                    $return42 = affiliate_tree_add_to_tree($tree, $row['uid'], $return20[1], $commit);
+                                    if (is_array($return42)) {
+                                      $return43 = affiliate_tree_add_to_tree($tree, $row['uid'], $return21[0], $commit);
+                                      if (is_array($return43)) {
+                                        $return44 = affiliate_tree_add_to_tree($tree, $row['uid'], $return21[1], $commit);
+                                        if (is_array($return44)) {
+                                          $return45 = affiliate_tree_add_to_tree($tree, $row['uid'], $return22[0], $commit);
+                                          if (is_array($return45)) {
+                                            $return46 = affiliate_tree_add_to_tree($tree, $row['uid'], $return22[1], $commit);
+                                            if (is_array($return46)) {
+                                              $return47 = affiliate_tree_add_to_tree($tree, $row['uid'], $retur23[0], $commit);
+                                              if (is_array($return47)) {
+                                                $return48 = affiliate_tree_add_to_tree($tree, $row['uid'], $retur23[1], $commit);
+                                                if (is_array($return48)) {
+                                                  $return49 = affiliate_tree_add_to_tree($tree, $row['uid'], $return24[0], $commit);
+                                                  if (is_array($return49)) {
+                                                    $return50 = affiliate_tree_add_to_tree($tree, $row['uid'], $return24[1], $commit);
+                                                    if (is_array($return50)) {
+                                                      $return51 = affiliate_tree_add_to_tree($tree, $row['uid'], $return25[0], $commit);
+                                                      if (is_array($return51)) {
+                                                        $return52 = affiliate_tree_add_to_tree($tree, $row['uid'], $return25[1], $commit);
+                                                        if (is_array($return52)) {
+                                                          $return53 = affiliate_tree_add_to_tree($tree, $row['uid'], $return26[0], $commit);
+                                                          if (is_array($return53)) {
+                                                            $return54 = affiliate_tree_add_to_tree($tree, $row['uid'], $return26[1], $commit);
+                                                            if (is_array($return54)) {
+                                                              $return55 = affiliate_tree_add_to_tree($tree, $row['uid'], $return27[0], $commit);
+                                                              if (is_array($return55)) {
+                                                                $return56 = affiliate_tree_add_to_tree($tree, $row['uid'], $return27[1], $commit);
+                                                                if (is_array($return56)) {
+                                                                  $return57 = affiliate_tree_add_to_tree($tree, $row['uid'], $return28[0], $commit);
+                                                                  if (is_array($return57)) {
+                                                                    $return58 = affiliate_tree_add_to_tree($tree, $row['uid'], $return28[1], $commit);
+                                                                    if (is_array($return58)) {
+                                                                      $return59 = affiliate_tree_add_to_tree($tree, $row['uid'], $return29[0], $commit);
+                                                                      if (is_array($return59)) {
+                                                                        $return60 = affiliate_tree_add_to_tree($tree, $row['uid'], $return29[1], $commit);
+                                                                        if (is_array($return60)) {
+                                                                          $return61 = affiliate_tree_add_to_tree($tree, $row['uid'], $return30[0], $commit);
+                                                                          if (is_array($return61)) {
+                                                                            $return62 = affiliate_tree_add_to_tree($tree, $row['uid'], $return30[1], $commit);
+                                                                          }
+                                                                        }
+                                                                      }
+                                                                    }
+                                                                  }
+                                                                }
+                                                              }
+                                                            }
+                                                          }
+                                                        }
+                                                      }
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    affiliate_tree_build_tree($tree, $row['uid'], $commit);
+  }
+}
+
+function affiliate_tree_add_to_tree(&$tree, $uid, $affiliate_uid, $commit) {
+
+  if (array_key_exists('user_affiliate_tree', $_SESSION) && $affiliate_uid == $_SESSION['user_affiliate_tree']) {
+    if (!empty($tree[0])) {
+      if (empty($tree[1])) {
+        $tree[1] = $uid;
+        if ($commit)
+          affiliate_tree_update_tree_parent($affiliate_uid, $uid);
+      }
+      else {
+        return array($tree[0], $tree[1]);
+      }
+    }
+    else {
+      $tree[0] = $uid;
+      if ($commit)
+        affiliate_tree_update_tree_parent($affiliate_uid, $uid);
+    }
+  }
+  else {
+    $index = array_search($affiliate_uid, $tree);
+
+    if ($index == 0) {
+      if (!empty($tree[2])) {
+        if (empty($tree[3])) {
+          $tree[3] = $uid;
+          if ($commit)
+            affiliate_tree_update_tree_parent($affiliate_uid, $uid);
+        }
+        else {
+          return array($tree[2], $tree[3]);
+        }
+      }
+      else {
+        $tree[2] = $uid;
+        if ($commit)
+          affiliate_tree_update_tree_parent($affiliate_uid, $uid);
+      }
+    }
+    elseif ($index == 1) {
+      if (!empty($tree[4])) {
+        if (empty($tree[5])) {
+          $tree[5] = $uid;
+          if ($commit)
+            affiliate_tree_update_tree_parent($affiliate_uid, $uid);
+        }
+        else {
+          return array($tree[4], $tree[5]);
+        }
+      }
+      else {
+        $tree[4] = $uid;
+        if ($commit)
+          affiliate_tree_update_tree_parent($affiliate_uid, $uid);
+      }
+    }
+    elseif ($index > 1 & $index <= 5) {
+      $level_index = $index - 1;
+      $child_1 = $level_index * 2 + 5 - 1;
+      $child_2 = $level_index * 2 + 5;
+      if (!empty($tree[$child_1])) {
+        if (empty($tree[$child_2])) {
+          $tree[$child_2] = $uid;
+          if ($commit) {
+            affiliate_tree_update_tree_parent($affiliate_uid, $uid);
+          }
+        }
+        else {
+          return array($tree[$child_1], $tree[$child_2]);
+        }
+      }
+      else {
+        $tree[$child_1] = $uid;
+        if ($commit) {
+          affiliate_tree_update_tree_parent($affiliate_uid, $uid);
+        }
+      }
+    }
+    elseif ($index > 5 & $index <= 13) {
+      $level_index = $index - 5;
+      $child_1 = $level_index * 2 + 13 - 1;
+      $child_2 = $level_index * 2 + 13;
+      if (!empty($tree[$child_1])) {
+        if (empty($tree[$child_2])) {
+          $tree[$child_2] = $uid;
+          if ($commit)
+            affiliate_tree_update_tree_parent($affiliate_uid, $uid);
+        }
+        else {
+          return array($tree[$child_1], $tree[$child_2]);
+        }
+      }
+      else {
+        $tree[$child_1] = $uid;
+        if ($commit)
+          affiliate_tree_update_tree_parent($affiliate_uid, $uid);
+      }
+    }
+    elseif ($index > 13 & $index <= 29) {
+      $level_index = $index - 13;
+      $child_1 = $level_index * 2 + 29 - 1;
+      $child_2 = $level_index * 2 + 29;
+      if (!empty($tree[$child_1])) {
+        if (empty($tree[$child_2])) {
+          $tree[$child_2] = $uid;
+          if ($commit)
+            affiliate_tree_update_tree_parent($affiliate_uid, $uid);
+        }
+        else {
+          return array($tree[$child_1], $tree[$child_2]);
+        }
+      }
+      else {
+        $tree[$child_1] = $uid;
+        if ($commit)
+          affiliate_tree_update_tree_parent($affiliate_uid, $uid);
+      }
+    }
+    elseif ($index > 29 & $index <= 61) {
+      $level_index = $index - 29;
+      $child_1 = $level_index * 2 + 61 - 1;
+      $child_2 = $level_index * 2 + 61;
+      if (!empty($tree[$child_1])) {
+        if (empty($tree[$child_2])) {
+          $tree[$child_2] = $uid;
+          if ($commit)
+            affiliate_tree_update_tree_parent($affiliate_uid, $uid);
+        }
+        else {
+          return array($tree[$child_1], $tree[$child_2]);
+        }
+      }
+      else {
+        $tree[$child_1] = $uid;
+        if ($commit)
+          affiliate_tree_update_tree_parent($affiliate_uid, $uid);
+      }
+    }
+    elseif ($index > 61 & $index <= 125) {
+      $level_index = $index - 61;
+      $child_1 = $level_index * 2 + 125 - 1;
+      $child_2 = $level_index * 2 + 125;
+      if (!empty($tree[$child_1])) {
+        if (empty($tree[$child_2])) {
+          $tree[$child_2] = $uid;
+          if ($commit)
+            affiliate_tree_update_tree_parent($affiliate_uid, $uid);
+        }
+        else {
+          return array($tree[$child_1], $tree[$child_2]);
+        }
+      }
+      else {
+        $tree[$child_1] = $uid;
+        if ($commit)
+          affiliate_tree_update_tree_parent($affiliate_uid, $uid);
+      }
+    }
+    elseif ($index > 125 & $index <= 253) {
+      $level_index = $index - 125;
+      $child_1 = $level_index * 2 + 253 - 1;
+      $child_2 = $level_index * 2 + 253;
+      if (!empty($tree[$child_1])) {
+        if (empty($tree[$child_2])) {
+          $tree[$child_2] = $uid;
+          if ($commit)
+            affiliate_tree_update_tree_parent($affiliate_uid, $uid);
+        }
+        else {
+          return array($tree[$child_1], $tree[$child_2]);
+        }
+      }
+      else {
+        $tree[$child_1] = $uid;
+        if ($commit)
+          affiliate_tree_update_tree_parent($affiliate_uid, $uid);
+      }
+    }
+    else {
+      return FALSE;
+    }
+  }
+  return 'saved';
+}
+
+function affiliate_tree_update_tree_parent($parent_uid, $uid) {
+  db_query("UPDATE {affiliate_tree} SET parent_uid=:parent_uid WHERE uid=:uid", array(':parent_uid' => $parent_uid, ':uid' => $uid));
+}
+
+function affiliate_tree_display_tree() {
+
+  $uid = $_SESSION['user_affiliate_tree'];
+
+  $output = '';
+
+  $tree = array();
+
+  affiliate_tree_build_tree($tree, $uid);
+
+  $levels = array(
+      '0' => array($uid),
+      '1' => array(isset($tree[0]) ? $tree[0] : '', isset($tree[1]) ? $tree[1] : ''),
+      '2' => array(isset($tree[2]) ? $tree[2] : '', isset($tree[3]) ? $tree[3] : '', isset($tree[4]) ? $tree[4] : '', isset($tree[5]) ? $tree[5] : ''),
+      '3' => array(isset($tree[6]) ? $tree[6] : '', isset($tree[7]) ? $tree[7] : '', isset($tree[8]) ? $tree[8] : '', isset($tree[9]) ? $tree[9] : '', isset($tree[10]) ? $tree[10] : '', isset($tree[11]) ? $tree[11] : '', isset($tree[12]) ? $tree[12] : '', isset($tree[13]) ? $tree[13] : ''),
+      '4' => array(isset($tree[14]) ? $tree[14] : '', isset($tree[15]) ? $tree[15] : '', isset($tree[16]) ? $tree[16] : '', isset($tree[17]) ? $tree[17] : '', isset($tree[18]) ? $tree[18] : '', isset($tree[19]) ? $tree[19] : '', isset($tree[20]) ? $tree[20] : '', isset($tree[21]) ? $tree[21] : '', isset($tree[22]) ? $tree[22] : '', isset($tree[23]) ? $tree[23] : '', isset($tree[24]) ? $tree[24] : '', isset($tree[25]) ? $tree[25] : '', isset($tree[26]) ? $tree[26] : '', isset($tree[27]) ? $tree[27] : '', isset($tree[28]) ? $tree[28] : '', isset($tree[29]) ? $tree[29] : ''),
+      '5' => array(isset($tree[30]) ? $tree[30] : '', isset($tree[31]) ? $tree[31] : '', isset($tree[32]) ? $tree[32] : '', isset($tree[33]) ? $tree[33] : '', isset($tree[34]) ? $tree[34] : '', isset($tree[35]) ? $tree[35] : '', isset($tree[36]) ? $tree[36] : '', isset($tree[37]) ? $tree[37] : '', isset($tree[38]) ? $tree[38] : '', isset($tree[39]) ? $tree[39] : '', isset($tree[40]) ? $tree[40] : '', isset($tree[41]) ? $tree[41] : '', isset($tree[42]) ? $tree[42] : '', isset($tree[43]) ? $tree[43] : '', isset($tree[44]) ? $tree[44] : '', isset($tree[45]) ? $tree[45] : '',
+          isset($tree[46]) ? $tree[46] : '', isset($tree[47]) ? $tree[47] : '', isset($tree[48]) ? $tree[48] : '', isset($tree[49]) ? $tree[49] : '', isset($tree[50]) ? $tree[50] : '', isset($tree[51]) ? $tree[51] : '',
+          isset($tree[52]) ? $tree[52] : '', isset($tree[53]) ? $tree[53] : '', isset($tree[54]) ? $tree[54] : '', isset($tree[55]) ? $tree[55] : '', isset($tree[56]) ? $tree[56] : '', isset($tree[57]) ? $tree[57] : '',
+          isset($tree[58]) ? $tree[58] : '', isset($tree[59]) ? $tree[59] : '', isset($tree[60]) ? $tree[60] : '', isset($tree[61]) ? $tree[61] : ''),
+      '6' => array(isset($tree[62]) ? $tree[62] : '', isset($tree[63]) ? $tree[63] : '', isset($tree[64]) ? $tree[64] : '', isset($tree[65]) ? $tree[65] : '', isset($tree[66]) ? $tree[66] : '', isset($tree[67]) ? $tree[67] : '',
+          isset($tree[68]) ? $tree[68] : '', isset($tree[69]) ? $tree[69] : '', isset($tree[70]) ? $tree[70] : '', isset($tree[71]) ? $tree[71] : '', isset($tree[72]) ? $tree[72] : '', isset($tree[73]) ? $tree[73] : '',
+          isset($tree[74]) ? $tree[74] : '', isset($tree[75]) ? $tree[75] : '', isset($tree[76]) ? $tree[76] : '', isset($tree[77]) ? $tree[77] : '',
+          isset($tree[78]) ? $tree[78] : '', isset($tree[79]) ? $tree[79] : '', isset($tree[80]) ? $tree[80] : '', isset($tree[81]) ? $tree[81] : '', isset($tree[82]) ? $tree[82] : '',
+          isset($tree[83]) ? $tree[83] : '', isset($tree[84]) ? $tree[84] : '', isset($tree[85]) ? $tree[85] : '', isset($tree[86]) ? $tree[86] : '', isset($tree[87]) ? $tree[87] : '',
+          isset($tree[88]) ? $tree[88] : '', isset($tree[89]) ? $tree[89] : '', isset($tree[90]) ? $tree[90] : '', isset($tree[91]) ? $tree[91] : '', isset($tree[92]) ? $tree[92] : '', isset($tree[93]) ? $tree[93] : '',
+          isset($tree[94]) ? $tree[94] : '', isset($tree[95]) ? $tree[95] : '', isset($tree[96]) ? $tree[96] : '', isset($tree[97]) ? $tree[97] : '', isset($tree[98]) ? $tree[98] : '',
+          isset($tree[99]) ? $tree[99] : '', isset($tree[100]) ? $tree[100] : '', isset($tree[101]) ? $tree[101] : '', isset($tree[102]) ? $tree[102] : '', isset($tree[103]) ? $tree[103] : '', isset($tree[104]) ? $tree[104] : '',
+          isset($tree[105]) ? $tree[105] : '', isset($tree[106]) ? $tree[106] : '', isset($tree[107]) ? $tree[107] : '', isset($tree[108]) ? $tree[108] : '', isset($tree[109]) ? $tree[109] : '',
+          isset($tree[110]) ? $tree[110] : '', isset($tree[111]) ? $tree[111] : '', isset($tree[112]) ? $tree[112] : '', isset($tree[113]) ? $tree[113] : '', isset($tree[114]) ? $tree[114] : '', isset($tree[115]) ? $tree[115] : '',
+          isset($tree[116]) ? $tree[116] : '', isset($tree[117]) ? $tree[117] : '', isset($tree[118]) ? $tree[118] : '', isset($tree[119]) ? $tree[119] : '', isset($tree[120]) ? $tree[120] : '', isset($tree[121]) ? $tree[121] : '',
+          isset($tree[122]) ? $tree[122] : '', isset($tree[123]) ? $tree[123] : '', isset($tree[124]) ? $tree[124] : '', isset($tree[125]) ? $tree[125] : ''),
+      '7' => array(isset($tree[126]) ? $tree[126] : '', isset($tree[127]) ? $tree[127] : '', isset($tree[128]) ? $tree[128] : '', isset($tree[129]) ? $tree[129] : '', isset($tree[130]) ? $tree[130] : '', isset($tree[131]) ? $tree[131] : '',
+          isset($tree[132]) ? $tree[132] : '', isset($tree[133]) ? $tree[133] : '', isset($tree[134]) ? $tree[134] : '', isset($tree[135]) ? $tree[135] : '', isset($tree[136]) ? $tree[136] : '', isset($tree[137]) ? $tree[137] : '',
+          isset($tree[138]) ? $tree[138] : '', isset($tree[139]) ? $tree[139] : '', isset($tree[140]) ? $tree[140] : '', isset($tree[141]) ? $tree[141] : '',
+          isset($tree[142]) ? $tree[142] : '', isset($tree[143]) ? $tree[143] : '', isset($tree[144]) ? $tree[144] : '', isset($tree[145]) ? $tree[145] : '', isset($tree[146]) ? $tree[146] : '', isset($tree[147]) ? $tree[147] : '',
+          isset($tree[148]) ? $tree[148] : '', isset($tree[149]) ? $tree[149] : '', isset($tree[150]) ? $tree[150] : '', isset($tree[151]) ? $tree[151] : '', isset($tree[152]) ? $tree[152] : '', isset($tree[153]) ? $tree[153] : '',
+          isset($tree[154]) ? $tree[154] : '', isset($tree[155]) ? $tree[155] : '', isset($tree[156]) ? $tree[156] : '', isset($tree[157]) ? $tree[157] : '',
+          isset($tree[158]) ? $tree[158] : '', isset($tree[159]) ? $tree[159] : '', isset($tree[160]) ? $tree[160] : '', isset($tree[161]) ? $tree[161] : '', isset($tree[162]) ? $tree[162] : '', isset($tree[163]) ? $tree[163] : '',
+          isset($tree[164]) ? $tree[164] : '', isset($tree[165]) ? $tree[165] : '', isset($tree[166]) ? $tree[166] : '', isset($tree[167]) ? $tree[167] : '', isset($tree[168]) ? $tree[168] : '', isset($tree[169]) ? $tree[169] : '',
+          isset($tree[170]) ? $tree[170] : '', isset($tree[171]) ? $tree[171] : '', isset($tree[172]) ? $tree[172] : '', isset($tree[173]) ? $tree[173] : '',
+          isset($tree[174]) ? $tree[174] : '', isset($tree[175]) ? $tree[175] : '', isset($tree[176]) ? $tree[176] : '', isset($tree[177]) ? $tree[177] : '', isset($tree[178]) ? $tree[178] : '', isset($tree[179]) ? $tree[179] : '',
+          isset($tree[180]) ? $tree[180] : '', isset($tree[181]) ? $tree[181] : '', isset($tree[182]) ? $tree[182] : '', isset($tree[183]) ? $tree[183] : '', isset($tree[184]) ? $tree[184] : '', isset($tree[185]) ? $tree[185] : '',
+          isset($tree[186]) ? $tree[186] : '', isset($tree[187]) ? $tree[187] : '', isset($tree[188]) ? $tree[188] : '', isset($tree[189]) ? $tree[189] : '',
+          isset($tree[190]) ? $tree[190] : '', isset($tree[191]) ? $tree[191] : '', isset($tree[192]) ? $tree[192] : '', isset($tree[193]) ? $tree[193] : '', isset($tree[194]) ? $tree[194] : '', isset($tree[195]) ? $tree[195] : '',
+          isset($tree[196]) ? $tree[196] : '', isset($tree[197]) ? $tree[197] : '', isset($tree[198]) ? $tree[198] : '', isset($tree[199]) ? $tree[199] : '', isset($tree[200]) ? $tree[200] : '', isset($tree[201]) ? $tree[201] : '',
+          isset($tree[202]) ? $tree[202] : '', isset($tree[203]) ? $tree[203] : '', isset($tree[204]) ? $tree[204] : '', isset($tree[205]) ? $tree[205] : '',
+          isset($tree[206]) ? $tree[206] : '', isset($tree[207]) ? $tree[207] : '', isset($tree[208]) ? $tree[208] : '', isset($tree[209]) ? $tree[209] : '', isset($tree[210]) ? $tree[210] : '', isset($tree[211]) ? $tree[211] : '',
+          isset($tree[212]) ? $tree[212] : '', isset($tree[213]) ? $tree[213] : '', isset($tree[214]) ? $tree[214] : '', isset($tree[215]) ? $tree[215] : '', isset($tree[216]) ? $tree[216] : '', isset($tree[217]) ? $tree[217] : '',
+          isset($tree[218]) ? $tree[218] : '', isset($tree[219]) ? $tree[219] : '', isset($tree[220]) ? $tree[220] : '', isset($tree[221]) ? $tree[221] : '',
+          isset($tree[222]) ? $tree[222] : '', isset($tree[223]) ? $tree[223] : '', isset($tree[224]) ? $tree[224] : '', isset($tree[225]) ? $tree[225] : '', isset($tree[226]) ? $tree[226] : '', isset($tree[227]) ? $tree[227] : '',
+          isset($tree[228]) ? $tree[228] : '', isset($tree[229]) ? $tree[229] : '', isset($tree[230]) ? $tree[230] : '', isset($tree[231]) ? $tree[231] : '', isset($tree[232]) ? $tree[232] : '', isset($tree[233]) ? $tree[233] : '',
+          isset($tree[234]) ? $tree[234] : '', isset($tree[235]) ? $tree[235] : '', isset($tree[236]) ? $tree[236] : '', isset($tree[237]) ? $tree[237] : '',
+          isset($tree[238]) ? $tree[238] : '', isset($tree[239]) ? $tree[239] : '', isset($tree[240]) ? $tree[240] : '', isset($tree[241]) ? $tree[241] : '', isset($tree[242]) ? $tree[242] : '', isset($tree[243]) ? $tree[243] : '',
+          isset($tree[244]) ? $tree[244] : '', isset($tree[245]) ? $tree[245] : '', isset($tree[246]) ? $tree[246] : '', isset($tree[247]) ? $tree[247] : '', isset($tree[248]) ? $tree[248] : '', isset($tree[249]) ? $tree[249] : '',
+          isset($tree[250]) ? $tree[250] : '', isset($tree[251]) ? $tree[251] : '', isset($tree[252]) ? $tree[252] : '', isset($tree[253]) ? $tree[253] : ''),
+  );
+
+  //$output .= '<br />'.dprint_r($levels, TRUE);
+  // create image
+  $width = 800;
+  $height = 800;
+  $i = 0;
+  $output .= '<div id="affiliate_tree">';
+
+  for ($j = $_SESSION['tree_level']; $j <= $_SESSION['tree_level'] + 5; $j++) {
+    if ($j == 0) {
+      $output .= '<div id="level' . $j . '" style="width: 100%; clear: both; height: 55px;">';
+    }
+    else {
+      $output .= '<div id="level' . $j . '" style="width: 100%; clear: both; height: 71px;">';
+    }
+    $full_middle_bottom_image = 'full_middle.png';
+    $empty_middle_bottom_image = 'empty_middle.png';
+
+    if ($j == $_SESSION['tree_level'] + 5) {
+      $full_middle_bottom_image = 'full_bottom.png';
+      $empty_middle_bottom_image = 'empty_bottom.png';
+    }
+
+    if ($j == '0') {
+      $margin = ($width / 2) - 43;
+      $node_user = user_load($levels[0][0]);
+      $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/top.jpg" style="margin-left:' . $margin . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+    }
+    elseif ($j == '1') {
+      $margin = ($width / 4);
+      $output .= '<hr style="width: ' . (2 * $margin + 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . ($margin - 22) . 'px;" />';
+      if (!empty($levels[1][0])) {
+        $node_user = user_load($levels[1][0]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . ($margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . ($margin - 43) . 'px; cursor: pointer;" />';
+      if (!empty($levels[1][1])) {
+        $node_user = user_load($levels[1][1]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 40) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 40) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+    }
+    elseif ($j == '2') {
+      $margin = ($width / 8);
+      $output .= '<hr style="width: ' . (2 * $margin + 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . ($margin - 22) . 'px;" />';
+      if (!empty($levels[2][0])) {
+        $node_user = user_load($levels[2][0]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . ($margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . ($margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[2][1])) {
+        $node_user = user_load($levels[2][1]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 40) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 40) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin + 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 22) . 'px;" />';
+      if (!empty($levels[2][2])) {
+        $node_user = user_load($levels[2][2]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[2][3])) {
+        $node_user = user_load($levels[2][3]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 40) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 40) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+    }
+    elseif ($j == '3') {
+      $margin = ($width / 16);
+      $output .= '<hr style="width: ' . (2 * $margin) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . ($margin - 22) . 'px;" />';
+      if (!empty($levels[3][0])) {
+        $node_user = user_load($levels[3][0]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . ($margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . ($margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[3][1])) {
+        $node_user = user_load($levels[3][1]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 40) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 40) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 23) . 'px;" />';
+      if (!empty($levels[3][2])) {
+        $node_user = user_load($levels[3][2]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[3][3])) {
+        $node_user = user_load($levels[3][3]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 13) . 'px;" />';
+      if (!empty($levels[3][4])) {
+        $node_user = user_load($levels[3][4]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 33) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 33) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[3][5])) {
+        $node_user = user_load($levels[3][5]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 23) . 'px;" />';
+      if (!empty($levels[3][6])) {
+        $node_user = user_load($levels[3][6]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[3][7])) {
+        $node_user = user_load($levels[3][7]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+    }
+    elseif ($j == '4') {
+      $margin = ($width / 32);
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . ($margin - 22) . 'px;" />';
+      if (!empty($levels[4][0])) {
+        $node_user = user_load($levels[4][0]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . ($margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . ($margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[4][1])) {
+        $node_user = user_load($levels[4][1]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 22) . 'px;" />';
+      if (!empty($levels[4][2])) {
+        $node_user = user_load($levels[4][2]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[4][3])) {
+        $node_user = user_load($levels[4][3]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 13) . 'px;" />';
+      if (!empty($levels[4][4])) {
+        $node_user = user_load($levels[4][4]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 33) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 33) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[4][5])) {
+        $node_user = user_load($levels[4][5]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 22) . 'px;" />';
+      if (!empty($levels[4][6])) {
+        $node_user = user_load($levels[4][6]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[4][7])) {
+        $node_user = user_load($levels[4][7]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 12) . 'px;" />';
+      if (!empty($levels[4][8])) {
+        $node_user = user_load($levels[4][8]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 32) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 32) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[4][9])) {
+        $node_user = user_load($levels[4][9]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 19) . 'px;" />';
+      if (!empty($levels[4][10])) {
+        $node_user = user_load($levels[4][10]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 39) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 39) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[4][11])) {
+        $node_user = user_load($levels[4][11]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 19) . 'px;" />';
+      if (!empty($levels[4][12])) {
+        $node_user = user_load($levels[4][12]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 39) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 39) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[4][13])) {
+        $node_user = user_load($levels[4][13]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 19) . 'px;" />';
+      if (!empty($levels[4][14])) {
+        $node_user = user_load($levels[4][14]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 39) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 39) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[4][15])) {
+        $node_user = user_load($levels[4][15]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+    }
+    elseif ($j == '5') {
+      $margin = ($width / 64);
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . ($margin - 22) . 'px;" />';
+      if (!empty($levels[5][0])) {
+        $node_user = user_load($levels[5][0]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . ($margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . ($margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[5][1])) {
+        $node_user = user_load($levels[5][1]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 18) . 'px;" />';
+      if (!empty($levels[5][2])) {
+        $node_user = user_load($levels[5][2]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 39) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 39) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[5][3])) {
+        $node_user = user_load($levels[5][3]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 23) . 'px;" />';
+      if (!empty($levels[5][4])) {
+        $node_user = user_load($levels[5][4]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[5][5])) {
+        $node_user = user_load($levels[5][5]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 41) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 41) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 23) . 'px;" />';
+      if (!empty($levels[5][6])) {
+        $node_user = user_load($levels[5][6]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[5][7])) {
+        $node_user = user_load($levels[5][7]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 41) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 41) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 12) . 'px;" />';
+      if (!empty($levels[5][8])) {
+        $node_user = user_load($levels[5][8]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 32) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 32) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[5][9])) {
+        $node_user = user_load($levels[5][9]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 42) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 42) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 23) . 'px;" />';
+      if (!empty($levels[5][10])) {
+        $node_user = user_load($levels[5][10]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 44) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 44) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[5][11])) {
+        $node_user = user_load($levels[5][11]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 42) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 42) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 18) . 'px;" />';
+      if (!empty($levels[5][12])) {
+        $node_user = user_load($levels[5][12]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 39) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 39) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[5][13])) {
+        $node_user = user_load($levels[5][13]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 42) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 42) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 23) . 'px;" />';
+      if (!empty($levels[5][14])) {
+        $node_user = user_load($levels[5][14]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 44) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 44) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[5][15])) {
+        $node_user = user_load($levels[5][15]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 42) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 42) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 8) . 'px;" />';
+      if (!empty($levels[5][16])) {
+        $node_user = user_load($levels[5][16]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 29) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 29) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[5][17])) {
+        $node_user = user_load($levels[5][17]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 42) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 42) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 23) . 'px;" />';
+      if (!empty($levels[5][18])) {
+        $node_user = user_load($levels[5][18]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 44) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 44) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[5][19])) {
+        $node_user = user_load($levels[5][19]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 42) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 42) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 18) . 'px;" />';
+      if (!empty($levels[5][20])) {
+        $node_user = user_load($levels[5][20]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 39) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 39) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[5][21])) {
+        $node_user = user_load($levels[5][21]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 42) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 42) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 18) . 'px;" />';
+      if (!empty($levels[5][22])) {
+        $node_user = user_load($levels[5][22]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 39) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 39) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[5][23])) {
+        $node_user = user_load($levels[5][23]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 42) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 42) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 18) . 'px;" />';
+      if (!empty($levels[5][24])) {
+        $node_user = user_load($levels[5][24]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 39) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 39) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[5][25])) {
+        $node_user = user_load($levels[5][25]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 42) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 42) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 18) . 'px;" />';
+      if (!empty($levels[5][26])) {
+        $node_user = user_load($levels[5][26]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 39) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 39) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[5][27])) {
+        $node_user = user_load($levels[5][27]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 42) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 42) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 18) . 'px;" />';
+      if (!empty($levels[5][28])) {
+        $node_user = user_load($levels[5][28]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 39) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 39) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[5][29])) {
+        $node_user = user_load($levels[5][29]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 42) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 42) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      $output .= '<hr style="width: ' . (2 * $margin - 1) . 'px; margin-top: 0; margin-bottom: 0; background-color: #CCCCCC; display: inline; position: absolute; margin-left: ' . (2 * $margin - 23) . 'px;" />';
+      if (!empty($levels[5][30])) {
+        $node_user = user_load($levels[5][30]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 44) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 44) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[5][31])) {
+        $node_user = user_load($levels[5][31]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 42) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 42) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+    }
+    elseif ($j == '6') {
+      $margin = ($width / 128);
+      if (!empty($levels[6][0])) {
+        $node_user = user_load($levels[6][0]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . ($margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . ($margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][1])) {
+        $node_user = user_load($levels[6][1]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+
+      if (!empty($levels[6][2])) {
+        $node_user = user_load($levels[6][2]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][3])) {
+        $node_user = user_load($levels[6][3]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      if (!empty($levels[6][4])) {
+        $node_user = user_load($levels[6][4]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][5])) {
+        $node_user = user_load($levels[6][5]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+
+      if (!empty($levels[6][6])) {
+        $node_user = user_load($levels[6][6]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][7])) {
+        $node_user = user_load($levels[6][7]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      if (!empty($levels[6][8])) {
+        $node_user = user_load($levels[6][8]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][9])) {
+        $node_user = user_load($levels[6][9]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+
+      if (!empty($levels[6][10])) {
+        $node_user = user_load($levels[6][10]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][11])) {
+        $node_user = user_load($levels[6][11]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      if (!empty($levels[6][12])) {
+        $node_user = user_load($levels[6][12]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][13])) {
+        $node_user = user_load($levels[6][13]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+
+      if (!empty($levels[6][14])) {
+        $node_user = user_load($levels[6][14]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][15])) {
+        $node_user = user_load($levels[6][15]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      if (!empty($levels[6][16])) {
+        $node_user = user_load($levels[6][16]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][17])) {
+        $node_user = user_load($levels[6][17]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+
+      if (!empty($levels[6][18])) {
+        $node_user = user_load($levels[6][18]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][19])) {
+        $node_user = user_load($levels[6][19]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      if (!empty($levels[6][20])) {
+        $node_user = user_load($levels[6][20]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][21])) {
+        $node_user = user_load($levels[6][21]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+
+      if (!empty($levels[6][22])) {
+        $node_user = user_load($levels[6][22]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][23])) {
+        $node_user = user_load($levels[6][23]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      if (!empty($levels[6][24])) {
+        $node_user = user_load($levels[6][24]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][25])) {
+        $node_user = user_load($levels[6][25]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+
+      if (!empty($levels[6][26])) {
+        $node_user = user_load($levels[6][26]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][27])) {
+        $node_user = user_load($levels[6][27]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      if (!empty($levels[6][28])) {
+        $node_user = user_load($levels[6][28]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][29])) {
+        $node_user = user_load($levels[6][29]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+
+      if (!empty($levels[6][30])) {
+        $node_user = user_load($levels[6][30]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][31])) {
+        $node_user = user_load($levels[6][31]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      if (!empty($levels[6][32])) {
+        $node_user = user_load($levels[6][32]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][33])) {
+        $node_user = user_load($levels[6][33]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+
+      if (!empty($levels[6][34])) {
+        $node_user = user_load($levels[6][34]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][35])) {
+        $node_user = user_load($levels[6][35]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      if (!empty($levels[6][36])) {
+        $node_user = user_load($levels[6][36]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][37])) {
+        $node_user = user_load($levels[6][37]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+
+      if (!empty($levels[6][38])) {
+        $node_user = user_load($levels[6][38]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][39])) {
+        $node_user = user_load($levels[6][39]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      if (!empty($levels[6][40])) {
+        $node_user = user_load($levels[6][40]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][41])) {
+        $node_user = user_load($levels[6][41]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+
+      if (!empty($levels[6][42])) {
+        $node_user = user_load($levels[6][42]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][43])) {
+        $node_user = user_load($levels[6][43]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      if (!empty($levels[6][44])) {
+        $node_user = user_load($levels[6][44]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][45])) {
+        $node_user = user_load($levels[6][45]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+
+      if (!empty($levels[6][46])) {
+        $node_user = user_load($levels[6][46]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][47])) {
+        $node_user = user_load($levels[6][47]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      if (!empty($levels[6][48])) {
+        $node_user = user_load($levels[6][48]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][49])) {
+        $node_user = user_load($levels[6][49]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+
+      if (!empty($levels[6][50])) {
+        $node_user = user_load($levels[6][50]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][51])) {
+        $node_user = user_load($levels[6][51]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      if (!empty($levels[6][52])) {
+        $node_user = user_load($levels[6][52]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][53])) {
+        $node_user = user_load($levels[6][53]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+
+      if (!empty($levels[6][54])) {
+        $node_user = user_load($levels[6][54]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][55])) {
+        $node_user = user_load($levels[6][55]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      if (!empty($levels[6][56])) {
+        $node_user = user_load($levels[6][56]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][57])) {
+        $node_user = user_load($levels[6][57]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+
+      if (!empty($levels[6][58])) {
+        $node_user = user_load($levels[6][58]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][59])) {
+        $node_user = user_load($levels[6][59]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+      if (!empty($levels[6][60])) {
+        $node_user = user_load($levels[6][60]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][61])) {
+        $node_user = user_load($levels[6][61]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+
+      if (!empty($levels[6][62])) {
+        $node_user = user_load($levels[6][62]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+      }
+      else
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+
+      if (!empty($levels[6][63])) {
+        $node_user = user_load($levels[6][63]);
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $full_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" title="' . $node_user->name . '"/>';
+        $i++;
+      }
+      else {
+        $output .= '<img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/' . $empty_middle_bottom_image . '" style="margin-left:' . (2 * $margin - 43) . 'px; cursor: pointer;" />';
+        $i++;
+      }
+    }
+    $output .= '</div>';
+  }
+
+  $output .= "</div>";
+
+  $output .= '<div id="guidelines" style="width: 100%"><img src="' . base_path() . drupal_get_path('module', 'affiliate_tree') . '/images/guidelines.jpg" style="margin-left: auto; margin-right: auto;display: block;" /></div>';
+
+  return $output;
+}
+
+function affiliate_tree_record_user($user) {
+  $_SESSION['user_affiliate_tree'] = $user->uid;
+  $_SESSION['tree_level'] = 0;
+}

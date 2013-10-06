@@ -1,0 +1,29 @@
+#edit-locate, #edit-username, #affiliate-tree-display label {
+    float: left;
+    margin: 0;
+    margin-left: 10px;
+}
+
+#locate {
+    float: left;
+    height: 100px;
+    margin-top: 13px;
+    width: 500px;
+}
+
+#up_levels {
+    float: left;
+    height: 100px;
+    width: 500px;
+}
+
+#edit-go-to-end-2, #edit-go-to-end-1 {
+    margin: 0;
+}
+
+#edit-go-to-end-1 {
+    float: right;
+}
+#edit-go-to-end-2 {
+    float: left;
+}
